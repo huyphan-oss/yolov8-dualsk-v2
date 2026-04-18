@@ -2123,53 +2123,48 @@ class DualPathSKBlock(nn.Module):
         return self.fuse(torch.cat((p1, p2), dim=1))
 
 # --- COPY VÀO CUỐI FILE block.py ---
-class SpatialGate(nn.Module):
-    def __init__(self):
+import torch
+import torch.nn as nn
+
+class LSSKBlock(nn.Module):
+    def __init__(self, c1, c2, r=4):
         super().__init__()
-        self.cv = nn.Conv2d(2, 1, kernel_size=7, padding=3, bias=False)
-        self.sigmoid = nn.Sigmoid()
+        d = max(c2 // r, 32)
+        self.sk1 = nn.Conv2d(c1, c2, kernel_size=3, padding=1)
+        self.sk2 = nn.Conv2d(c1, c2, kernel_size=5, padding=2)
+        self.avg_pool = nn.AdaptiveAvgPool2d(1)
+        self.fc = nn.Sequential(
+            nn.Linear(c2, d), nn.ReLU(inplace=True),
+            nn.Linear(d, c2 * 2), nn.Softmax(dim=1)
+        )
 
     def forward(self, x):
-        avg_out = torch.mean(x, dim=1, keepdim=True)
-        max_out, _ = torch.max(x, dim=1, keepdim=True)
-        out = torch.cat([avg_out, max_out], dim=1)
-        return x * self.sigmoid(self.cv(out))
-
-class SKConv_Precision(nn.Module):
-    def __init__(self, features, r=4, L=32):
-        super().__init__()
-        d = max(int(features / r), L)
-        self.M = 2
-        self.convs = nn.ModuleList([
-            nn.Sequential(nn.Conv2d(features, features, 3, padding=1+i, dilation=1+i, groups=features, bias=False),
-                          nn.BatchNorm2d(features), nn.SiLU()) for i in range(self.M)
-        ])
-        self.gap = nn.AdaptiveAvgPool2d(1)
-        self.gmp = nn.AdaptiveMaxPool2d(1)
-        self.fc = nn.Sequential(nn.Conv2d(features, d, 1, bias=False), nn.BatchNorm2d(d), nn.SiLU())
-        self.fcs = nn.ModuleList([nn.Conv2d(d, features, 1) for _ in range(self.M)])
-        self.softmax = nn.Softmax(dim=1)
-
-    def forward(self, x):
-        feats = torch.stack([conv(x) for conv in self.convs], dim=1)
-        fea_sum = torch.sum(feats, dim=1)
-        fea_z = self.fc(self.gap(fea_sum) + self.gmp(fea_sum))
-        attention = self.softmax(torch.stack([fc(fea_z) for fc in self.fcs], dim=1))
-        return torch.sum(feats * attention, dim=1)
+        feat1, feat2 = self.sk1(x), self.sk2(x)
+        weights = self.fc(self.avg_pool(feat1 + feat2).view(x.size(0), -1)).view(x.size(0), 2, x.size(1), 1, 1)
+        return feat1 * weights[:, 0] + feat2 * weights[:, 1]
 
 class C2f_DualSK(nn.Module):
-    def __init__(self, c1, c2, n=1, shortcut=False, g=1, e=0.5):
+    def __init__(self, c1, c2, n=1, e=0.5):
         super().__init__()
         self.c = int(c2 * e)
-        self.cv1 = nn.Sequential(nn.Conv2d(c1, 2 * self.c, 1, 1), nn.BatchNorm2d(2 * self.c), nn.SiLU())
-        self.cv2 = nn.Sequential(nn.Conv2d((2 + n) * self.c, c2, 1, 1), nn.BatchNorm2d(c2), nn.SiLU())
-        self.m = nn.ModuleList(SKConv_Precision(self.c) for _ in range(n))
-        self.sa = SpatialGate()
+        self.cv1 = Conv(c1, 2 * self.c, 1, 1)
+        self.cv2 = Conv((2 + n) * self.c, c2, 1)
+        self.m = nn.ModuleList(LSSKBlock(self.c, self.c) for _ in range(n))
 
     def forward(self, x):
         y = list(self.cv1(x).chunk(2, 1))
         y.extend(m(y[-1]) for m in self.m)
-        return self.sa(self.cv2(torch.cat(y, 1)))
+        return self.cv2(torch.cat(y, 1))
+
+class GhostConv(nn.Module):
+    def __init__(self, c1, c2, k=1, s=1):
+        super().__init__()
+        c_ = c2 // 2
+        self.cv1 = Conv(c1, c_, k, s)
+        self.cv2 = Conv(c_, c_, 3, 1, 1)
+    def forward(self, x):
+        y = self.cv1(x)
+        return torch.cat((y, self.cv2(y)), 1)
 # ==========================================
 # KẾT THÚC MODULE DUAL-SK
 # ==========================================
