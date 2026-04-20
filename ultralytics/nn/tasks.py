@@ -179,13 +179,6 @@ class BaseModel(torch.nn.Module):
         for m in self.model:
             if m.f != -1:  # if not from previous layer
                 x = y[m.f] if isinstance(m.f, int) else [x if j == -1 else y[j] for j in m.f]  # from earlier layers
-            # --- CHÈN ĐOẠN FIX LỖI SIZE TẠI ĐÂY ---
-            if isinstance(x, list):
-                target_shape = x[0].shape[2:] 
-                for i in range(1, len(x)):
-                    if x[i].shape[2:] != target_shape:
-                        x[i] = torch.nn.functional.interpolate(x[i], size=target_shape, mode='bilinear', align_corners=False)
-            # --------------------------------------
             if profile:
                 self._profile_one_layer(m, x, dt)
             x = m(x)  # run
