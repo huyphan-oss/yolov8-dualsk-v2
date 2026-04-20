@@ -2066,6 +2066,7 @@ class RealNVP(nn.Module):
         z, log_det = self.backward_p(x)
         return self.prior.log_prob(z) + log_det
 
+
 # ==========================================
 # THÊM MODULE DUAL-SK TỪ ĐÂY
 # ==========================================
@@ -2074,12 +2075,13 @@ class SASK(nn.Module):
         super().__init__()
         # Tạo bản đồ chú ý không gian dựa trên cường độ đặc trưng
         self.gate = nn.Sequential(
-            nn.Conv2d(ch, 1, 1, bias=False), # Nén kênh về 1 để tìm vùng quan trọng
-            nn.Sigmoid()
+            nn.Conv2d(ch, 1, 1, bias=False),  # Nén kênh về 1 để tìm vùng quan trọng
+            nn.Sigmoid(),
         )
 
     def forward(self, x):
         return x * self.gate(x)
+
 
 # --- 2. Module CASK (Channel-Aware): Giúp tăng Precision (giảm báo động giả) ---
 class CASK(nn.Module):
@@ -2096,19 +2098,20 @@ class CASK(nn.Module):
         attn = self.sigmoid(y).view(x.size(0), x.size(1), 1, 1)
         return x * attn
 
+
 # --- 3. Module DualSKBlock (Phiên bản tối ưu cho Nano - Không Split) ---
 class DualSKBlock(nn.Module):
-    def __init__(self, c1, c2, k1=7, k2=11, is_tiny=True): 
+    def __init__(self, c1, c2, k1=7, k2=11, is_tiny=True):
         # YOLOv8 tự truyền: c1 (in), c2 (out). Ta bỏ 'n' ở đây vì C2f layer xử lý n qua repeats.
         super().__init__()
         # MSK: Trích xuất đa quy mô (Multi-Scale)
         self.branch1 = Conv(c1, c2, k1)
         self.branch2 = Conv(c1, c2, k2)
-        
+
         # Dual Attention song song
         self.sask = SASK(c2)
         self.cask = CASK(c2)
-        
+
         # Lớp chiếu và hòa trộn đặc trưng
         self.proj = nn.Conv2d(c2, c2, 1)
 
@@ -2116,14 +2119,16 @@ class DualSKBlock(nn.Module):
         # Đặc trưng đa quy mô
         x1 = self.branch1(x)
         x2 = self.branch2(x)
-        
-        feat = x1 + x2 # Fusion
-        
+
+        feat = x1 + x2  # Fusion
+
         # Chú ý không gian và chú ý kênh song song
         out = self.sask(feat) + self.cask(feat)
-        
+
         # Residual connection (Xr - Remaining Path) để bảo toàn vật thể nhỏ
         return self.proj(out) + x1
+
+
 # ==========================================
 # KẾT THÚC MODULE DUAL-SK
 # ==========================================
