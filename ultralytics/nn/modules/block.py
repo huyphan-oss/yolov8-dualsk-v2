@@ -2097,22 +2097,26 @@ class CASK(nn.Module):
         return x * attn  # Nhân để lọc kênh
 
 # --- 3. Module DualSKBlock (Phiên bản tối ưu cho Nano - Không Split) ---
+from .conv import Conv, DWConv  # Đảm bảo có import DWConv ở đầu file
+
 class DualSKBlock(nn.Module):
-    def __init__(self, c1, k1=5, k2=7): # Giảm xuống 5 và 7
+    def __init__(self, c1, k1=5, k2=7):
         super().__init__()
-        # Thêm tham số g=c1 để biến nó thành Depthwise Convolution
-        self.branch1 = Conv(c1, c1, k=k1, g=c1) 
-        self.branch2 = Conv(c1, c1, k=k2, g=c1)
+        # Ép dùng Depthwise Conv để giảm GFLOPs
+        self.branch1 = DWConv(c1, c1, k=k1) 
+        self.branch2 = DWConv(c1, c1, k=k2)
+        
         self.sask = SASK(c1)
         self.cask = CASK(c1)
-        self.proj = Conv(c1, c1, k=1) # Giữ nguyên lớp này để tổng hợp thông tin
+        
+        # Lớp này giữ nguyên để tổng hợp thông tin từ các kênh
+        self.proj = Conv(c1, c1, k=1) 
 
     def forward(self, x):
         x1 = self.branch1(x)
         x2 = self.branch2(x)
         
-        # Cái logic fix size ông đã làm trong tasks.py rồi thì ở đây không cần nữa
-        # Hoặc nếu chưa chắc chắn thì cứ để lại cho an toàn:
+        # Fix lệch size (nếu có)
         if x1.shape[2:] != x2.shape[2:]:
             x2 = F.interpolate(x2, size=x1.shape[2:], mode='bilinear', align_corners=False)
             
