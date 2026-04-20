@@ -2116,10 +2116,16 @@ class DualSKBlock(nn.Module):
     def forward(self, x):
         x1 = self.branch1(x)
         x2 = self.branch2(x)
+        
+        # --- BƯỚC FIX LỖI: Căn chỉnh kích thước (Alignment) ---
+        if x1.shape != x2.shape:
+            # Ép x2 về cùng kích thước H, W với x1 để thực hiện được phép cộng/nhân
+            x2 = nn.functional.interpolate(x2, size=x1.shape[2:], mode='bilinear', align_corners=False)
+        
         feat = x1 + x2
         
-        # Chạy Attention song song và nhân trực tiếp để ép các vùng nhiễu về 0
-        out = self.sask(feat) * self.cask(feat) # Chuyển từ cộng (+) sang nhân (*) để khắt khe hơn
+        # Chạy Attention song song và NHÂN để tăng Precision
+        out = self.sask(feat) * self.cask(feat) 
         return self.proj(out) + x1
 # ==========================================
 # KẾT THÚC MODULE DUAL-SK
