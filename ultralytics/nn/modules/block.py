@@ -2085,12 +2085,13 @@ class SASK(nn.Module):
 class CASK(nn.Module):
     def __init__(self, ch):
         super().__init__()
+        # Sử dụng kernel 5 thay vì 3 để mở rộng vùng quan sát đặc trưng kênh
         self.avg_pool = nn.AdaptiveAvgPool2d(1)
-        # Tích chập 1D học mối quan hệ giữa các kênh màu sắc/đặc trưng
-        self.conv = nn.Conv1d(1, 1, kernel_size=3, padding=1, bias=False)
+        self.conv = nn.Conv1d(1, 1, kernel_size=5, padding=2, bias=False)
         self.sigmoid = nn.Sigmoid()
 
     def forward(self, x):
+        # Bước này giúp mô hình nhận diện: đâu là lá bệnh, đâu là đất/nhiễu
         y = self.avg_pool(x).view(x.size(0), 1, -1)
         y = self.conv(y)
         attn = self.sigmoid(y).view(x.size(0), x.size(1), 1, 1)
@@ -2113,16 +2114,12 @@ class DualSKBlock(nn.Module):
         self.proj = nn.Conv2d(c2, c2, 1)
 
     def forward(self, x):
-        # Đặc trưng đa quy mô
         x1 = self.branch1(x)
         x2 = self.branch2(x)
+        feat = x1 + x2
         
-        feat = x1 + x2 # Fusion
-        
-        # Chú ý không gian và chú ý kênh song song
-        out = self.sask(feat) + self.cask(feat)
-        
-        # Residual connection (Xr - Remaining Path) để bảo toàn vật thể nhỏ
+        # Chạy Attention song song và nhân trực tiếp để ép các vùng nhiễu về 0
+        out = self.sask(feat) * self.cask(feat) # Chuyển từ cộng (+) sang nhân (*) để khắt khe hơn
         return self.proj(out) + x1
 # ==========================================
 # KẾT THÚC MODULE DUAL-SK
