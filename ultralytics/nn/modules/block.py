@@ -2085,17 +2085,16 @@ class SASK(nn.Module):
 class CASK(nn.Module):
     def __init__(self, ch):
         super().__init__()
-        # Sử dụng kernel 5 thay vì 3 để mở rộng vùng quan sát đặc trưng kênh
         self.avg_pool = nn.AdaptiveAvgPool2d(1)
+        # Kernel 5 để tăng khả năng quan sát giữa các kênh màu
         self.conv = nn.Conv1d(1, 1, kernel_size=5, padding=2, bias=False)
         self.sigmoid = nn.Sigmoid()
 
     def forward(self, x):
-        # Bước này giúp mô hình nhận diện: đâu là lá bệnh, đâu là đất/nhiễu
         y = self.avg_pool(x).view(x.size(0), 1, -1)
         y = self.conv(y)
         attn = self.sigmoid(y).view(x.size(0), x.size(1), 1, 1)
-        return x * attn
+        return x * attn  # Nhân để lọc kênh
 
 # --- 3. Module DualSKBlock (Phiên bản tối ưu cho Nano - Không Split) ---
 class DualSKBlock(nn.Module):
@@ -2117,15 +2116,16 @@ class DualSKBlock(nn.Module):
         x1 = self.branch1(x)
         x2 = self.branch2(x)
         
-        # --- BƯỚC FIX LỖI: Căn chỉnh kích thước (Alignment) ---
-        if x1.shape != x2.shape:
-            # Ép x2 về cùng kích thước H, W với x1 để thực hiện được phép cộng/nhân
-            x2 = nn.functional.interpolate(x2, size=x1.shape[2:], mode='bilinear', align_corners=False)
+        # --- FIX LỖI DIMENSION: Căn chỉnh x2 theo x1 ---
+        if x1.shape[2:] != x2.shape[2:]:
+            import torch.nn.functional as F
+            x2 = F.interpolate(x2, size=x1.shape[2:], mode='bilinear', align_corners=False)
         
         feat = x1 + x2
         
-        # Chạy Attention song song và NHÂN để tăng Precision
+        # CHIẾN THUẬT PRECISION: Nhân SASK và CASK (Phép toán AND)
         out = self.sask(feat) * self.cask(feat) 
+        
         return self.proj(out) + x1
 # ==========================================
 # KẾT THÚC MODULE DUAL-SK
