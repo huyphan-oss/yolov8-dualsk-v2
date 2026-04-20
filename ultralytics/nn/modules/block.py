@@ -2098,35 +2098,28 @@ class CASK(nn.Module):
 
 # --- 3. Module DualSKBlock (Phiên bản tối ưu cho Nano - Không Split) ---
 class DualSKBlock(nn.Module):
-    def __init__(self, c1, c2, k1=7, k2=11, is_tiny=True): 
-        # YOLOv8 tự truyền: c1 (in), c2 (out). Ta bỏ 'n' ở đây vì C2f layer xử lý n qua repeats.
+    def __init__(self, c1, k1=5, k2=7): # Giảm xuống 5 và 7
         super().__init__()
-        # MSK: Trích xuất đa quy mô (Multi-Scale)
-        self.branch1 = Conv(c1, c2, k1)
-        self.branch2 = Conv(c1, c2, k2)
-        
-        # Dual Attention song song
-        self.sask = SASK(c2)
-        self.cask = CASK(c2)
-        
-        # Lớp chiếu và hòa trộn đặc trưng
-        self.proj = nn.Conv2d(c2, c2, 1)
+        # Thêm tham số g=c1 để biến nó thành Depthwise Convolution
+        self.branch1 = Conv(c1, c1, k=k1, g=c1) 
+        self.branch2 = Conv(c1, c1, k=k2, g=c1)
+        self.sask = SASK(c1)
+        self.cask = CASK(c1)
+        self.proj = Conv(c1, c1, k=1) # Giữ nguyên lớp này để tổng hợp thông tin
 
     def forward(self, x):
         x1 = self.branch1(x)
         x2 = self.branch2(x)
         
-        # --- FIX LỖI DIMENSION: Căn chỉnh x2 theo x1 ---
+        # Cái logic fix size ông đã làm trong tasks.py rồi thì ở đây không cần nữa
+        # Hoặc nếu chưa chắc chắn thì cứ để lại cho an toàn:
         if x1.shape[2:] != x2.shape[2:]:
-            import torch.nn.functional as F
             x2 = F.interpolate(x2, size=x1.shape[2:], mode='bilinear', align_corners=False)
-        
+            
         feat = x1 + x2
-        
-        # CHIẾN THUẬT PRECISION: Nhân SASK và CASK (Phép toán AND)
-        out = self.sask(feat) * self.cask(feat) 
-        
+        out = self.sask(feat) * self.cask(feat)
         return self.proj(out) + x1
+
 # ==========================================
 # KẾT THÚC MODULE DUAL-SK
 # ==========================================
