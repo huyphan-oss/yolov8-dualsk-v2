@@ -72,7 +72,7 @@ from ultralytics.nn.modules import (
     YOLOESegment,
     YOLOESegment26,
     v10Detect,
-    DualSKBlock,
+    C2f_DualSK,
     SASK,
     CASK
 )
@@ -1603,7 +1603,7 @@ def parse_model(d, ch, verbose=True):
             C1,
             C2,
             C2f,
-            DualSKBlock,
+            C2f_DualSK,
             SASK,
             CASK,
             C3k2,
@@ -1632,7 +1632,7 @@ def parse_model(d, ch, verbose=True):
             C1,
             C2,
             C2f,
-            DualSKBlock,
+            C2f_DualSK,
             SASK,
             CASK,
             C3k2,
