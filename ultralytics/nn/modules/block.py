@@ -2099,25 +2099,30 @@ class CASK(nn.Module):
         return x * y.expand_as(x)
 
 class DualSKBlock_Core(nn.Module):
-    """Lớp lõi dùng bên trong C2f"""
     def __init__(self, c1, k1=5, k2=7):
         super().__init__()
-        # Ép dùng Depthwise cho nhẹ
         self.branch1 = Conv(c1, c1, k=k1, g=c1)
         self.branch2 = Conv(c1, c1, k=k2, g=c1)
-        self.sask = SASK(c1)
-        self.cask = CASK(c1)
-        self.proj = Conv(c1, c1, k=1)
+        self.sask = SASK(c1 * 2) # Nhân 2 vì sau khi concat channel tăng gấp đôi
+        self.cask = CASK(c1 * 2)
+        # Lớp nén: Đưa c1*2 về lại c1 để cộng Identity
+        self.proj = Conv(c1 * 2, c1, k=1) 
 
     def forward(self, x):
         h, w = x.shape[2:]
         x1 = self.branch1(x)
         x2 = self.branch2(x)
+        
+        # Ép size
         if x1.shape[2:] != (h, w):
             x1 = F.interpolate(x1, size=(h, w), mode='bilinear', align_corners=False)
         if x2.shape[2:] != (h, w):
             x2 = F.interpolate(x2, size=(h, w), mode='bilinear', align_corners=False)
-        feat = x1 + x2
+            
+        # CHIÊU CONCAT: Ghép thay vì cộng
+        feat = torch.cat([x1, x2], dim=1) 
+        
+        # Attention chạy trên thông tin tổng hợp
         out = self.sask(feat) * self.cask(feat)
         return self.proj(out) + x
 
