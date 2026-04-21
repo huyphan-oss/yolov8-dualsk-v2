@@ -2097,31 +2097,32 @@ class CASK(nn.Module):
         return x * attn  # Nhân để lọc kênh
 
 # --- 3. Module DualSKBlock (Phiên bản tối ưu cho Nano - Không Split) ---
-from .conv import Conv, DWConv  # Đảm bảo có import DWConv ở đầu file
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from .conv import Conv, DWConv # Phải có DWConv ở đây
 
 class DualSKBlock(nn.Module):
-    def __init__(self, c1, k1=5, k2=7):
+    def __init__(self, c1, k1=5, k2=7): # Giảm xuống 5 và 7 là hợp lý nhất cho Drone
         super().__init__()
-        # Ép dùng Depthwise Conv để giảm GFLOPs
+        # g=c1 biến nó thành Depthwise, cực nhẹ
         self.branch1 = DWConv(c1, c1, k=k1) 
         self.branch2 = DWConv(c1, c1, k=k2)
-        
         self.sask = SASK(c1)
         self.cask = CASK(c1)
-        
-        # Lớp này giữ nguyên để tổng hợp thông tin từ các kênh
-        self.proj = Conv(c1, c1, k=1) 
+        self.proj = Conv(c1, c1, k=1) # Lớp này để mix các kênh lại
 
     def forward(self, x):
         x1 = self.branch1(x)
         x2 = self.branch2(x)
         
-        # Fix lệch size (nếu có)
+        # Luôn giữ cái fix size này để tránh lỗi 36 vs 33
         if x1.shape[2:] != x2.shape[2:]:
             x2 = F.interpolate(x2, size=x1.shape[2:], mode='bilinear', align_corners=False)
             
         feat = x1 + x2
-        out = self.sask(feat) * self.cask(feat)
+        # SASK + CASK kết hợp để lọc "Vị trí" và "Màu sắc" vết bệnh
+        out = self.sask(feat) * self.cask(feat) 
         return self.proj(out) + x1
 
 # ==========================================
