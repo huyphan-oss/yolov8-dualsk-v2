@@ -39,6 +39,7 @@ from .block import (
     BottleneckCSP,
     C2f,
     DualSKBlock,
+    DualSKBlock_Core,
     SASK,
     CASK,
     C2fAttn,
