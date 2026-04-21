@@ -2072,26 +2072,19 @@ class RealNVP(nn.Module):
 class SASK(nn.Module):
     def __init__(self, ch):
         super().__init__()
-        # Sử dụng phép tích chập để học bản đồ chú ý không gian
         self.conv = nn.Sequential(
             nn.Conv2d(2, 1, kernel_size=7, padding=3, bias=False),
             nn.Sigmoid()
         )
-
     def forward(self, x):
-        # Lấy Max và Avg theo chiều Channel để nén thông tin không gian
         avg_out = torch.mean(x, dim=1, keepdim=True)
         max_out, _ = torch.max(x, dim=1, keepdim=True)
-        # Ghép lại rồi đưa qua Conv để tạo Weight Mask
-        mask = torch.cat([avg_out, max_out], dim=1)
-        mask = self.conv(mask)
+        mask = self.conv(torch.cat([avg_out, max_out], dim=1))
         return x * mask
 
-# --- 2. Module CASK (Channel-Aware): Giúp tăng Precision (giảm báo động giả) ---
 class CASK(nn.Module):
     def __init__(self, ch, reduction=16):
         super().__init__()
-        # Ép thông tin toàn cục vào một vector
         self.avg_pool = nn.AdaptiveAvgPool2d(1)
         self.fc = nn.Sequential(
             nn.Linear(ch, ch // reduction, bias=False),
@@ -2099,55 +2092,48 @@ class CASK(nn.Module):
             nn.Linear(ch // reduction, ch, bias=False),
             nn.Sigmoid()
         )
-
     def forward(self, x):
         b, c, _, _ = x.size()
-        # Tính toán trọng số cho từng channel
         y = self.avg_pool(x).view(b, c)
         y = self.fc(y).view(b, c, 1, 1)
         return x * y.expand_as(x)
 
-# --- 3. Module DualSKBlock (Phiên bản tối ưu cho Nano - Không Split) ---
-class DualSKBlock(nn.Module):
+class DualSKBlock_Core(nn.Module):
+    """Lớp lõi dùng bên trong C2f"""
     def __init__(self, c1, k1=5, k2=7):
         super().__init__()
-        mid_c = c1 // 4  # Nén channel xuống 4 lần trước khi tính toán Kernel to
-        self.cv1 = Conv(c1, mid_c, k=1) 
-        
-        # Giờ tính trên mid_c (ví dụ 1024 -> 256), nhẹ hơn 16 lần!
-        self.branch1 = Conv(mid_c, mid_c, k=k1, g=mid_c) 
-        self.branch2 = Conv(mid_c, mid_c, k=k2, g=mid_c)
-        
-        self.sask = SASK(mid_c)
-        self.cask = CASK(mid_c)
-        
-        self.cv2 = Conv(mid_c, c1, k=1) # Mở rộng lại về c1
+        # Ép dùng Depthwise cho nhẹ
+        self.branch1 = Conv(c1, c1, k=k1, g=c1)
+        self.branch2 = Conv(c1, c1, k=k2, g=c1)
+        self.sask = SASK(c1)
+        self.cask = CASK(c1)
+        self.proj = Conv(c1, c1, k=1)
 
     def forward(self, x):
-        identity = x
-        # Lưu lại kích thước gốc của đầu vào (ví dụ: 16x16)
-        h, w = x.shape[2:] 
-        
-        out = self.cv1(x)
-        x1 = self.branch1(out)
-        x2 = self.branch2(out)
-        
-        # 1. Ép 2 nhánh về cùng size (đề phòng k=7 làm lệch)
+        h, w = x.shape[2:]
+        x1 = self.branch1(x)
+        x2 = self.branch2(x)
         if x1.shape[2:] != (h, w):
             x1 = F.interpolate(x1, size=(h, w), mode='bilinear', align_corners=False)
         if x2.shape[2:] != (h, w):
             x2 = F.interpolate(x2, size=(h, w), mode='bilinear', align_corners=False)
-            
         feat = x1 + x2
         out = self.sask(feat) * self.cask(feat)
-        out = self.cv2(out)
-        
-        # 2. CÚ CHỐT: Đảm bảo đầu ra khớp tuyệt đối với đầu vào để cộng Identity
-        if out.shape[2:] != (h, w):
-            out = F.interpolate(out, size=(h, w), mode='bilinear', align_corners=False)
-            
-        return out + identity
+        return self.proj(out) + x
 
+class C2f_DualSK(nn.Module):
+    """Tinh hoa kết hợp: C2f + DualSK"""
+    def __init__(self, c1, c2, n=1, shortcut=False, g=1, e=0.5):
+        super().__init__()
+        self.c = int(c2 * e)
+        self.cv1 = Conv(c1, 2 * self.c, 1, 1)
+        self.cv2 = Conv((2 + n) * self.c, c2, 1)
+        self.m = nn.ModuleList(DualSKBlock_Core(self.c) for _ in range(n))
+
+    def forward(self, x):
+        y = list(self.cv1(x).chunk(2, 1))
+        y.extend(m(y[-1]) for m in self.m)
+        return self.cv2(torch.cat(y, 1))
 # ==========================================
 # KẾT THÚC MODULE DUAL-SK
 # ==========================================
