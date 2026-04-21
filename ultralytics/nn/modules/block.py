@@ -2072,57 +2072,68 @@ class RealNVP(nn.Module):
 class SASK(nn.Module):
     def __init__(self, ch):
         super().__init__()
-        # Tạo bản đồ chú ý không gian dựa trên cường độ đặc trưng
-        self.gate = nn.Sequential(
-            nn.Conv2d(ch, 1, 1, bias=False), # Nén kênh về 1 để tìm vùng quan trọng
+        # Sử dụng phép tích chập để học bản đồ chú ý không gian
+        self.conv = nn.Sequential(
+            nn.Conv2d(2, 1, kernel_size=7, padding=3, bias=False),
             nn.Sigmoid()
         )
 
     def forward(self, x):
-        return x * self.gate(x)
+        # Lấy Max và Avg theo chiều Channel để nén thông tin không gian
+        avg_out = torch.mean(x, dim=1, keepdim=True)
+        max_out, _ = torch.max(x, dim=1, keepdim=True)
+        # Ghép lại rồi đưa qua Conv để tạo Weight Mask
+        mask = torch.cat([avg_out, max_out], dim=1)
+        mask = self.conv(mask)
+        return x * mask
 
 # --- 2. Module CASK (Channel-Aware): Giúp tăng Precision (giảm báo động giả) ---
 class CASK(nn.Module):
-    def __init__(self, ch):
+    def __init__(self, ch, reduction=16):
         super().__init__()
+        # Ép thông tin toàn cục vào một vector
         self.avg_pool = nn.AdaptiveAvgPool2d(1)
-        # Kernel 5 để tăng khả năng quan sát giữa các kênh màu
-        self.conv = nn.Conv1d(1, 1, kernel_size=5, padding=2, bias=False)
-        self.sigmoid = nn.Sigmoid()
+        self.fc = nn.Sequential(
+            nn.Linear(ch, ch // reduction, bias=False),
+            nn.ReLU(inplace=True),
+            nn.Linear(ch // reduction, ch, bias=False),
+            nn.Sigmoid()
+        )
 
     def forward(self, x):
-        y = self.avg_pool(x).view(x.size(0), 1, -1)
-        y = self.conv(y)
-        attn = self.sigmoid(y).view(x.size(0), x.size(1), 1, 1)
-        return x * attn  # Nhân để lọc kênh
+        b, c, _, _ = x.size()
+        # Tính toán trọng số cho từng channel
+        y = self.avg_pool(x).view(b, c)
+        y = self.fc(y).view(b, c, 1, 1)
+        return x * y.expand_as(x)
 
 # --- 3. Module DualSKBlock (Phiên bản tối ưu cho Nano - Không Split) ---
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-from .conv import Conv, DWConv # Phải có DWConv ở đây
-
 class DualSKBlock(nn.Module):
-    def __init__(self, c1, k1=5, k2=7): # Giảm xuống 5 và 7 là hợp lý nhất cho Drone
+    def __init__(self, c1, k1=5, k2=7):
         super().__init__()
-        # g=c1 biến nó thành Depthwise, cực nhẹ
         self.branch1 = DWConv(c1, c1, k=k1) 
         self.branch2 = DWConv(c1, c1, k=k2)
+        
+        # Khởi tạo 2 khối Attention
         self.sask = SASK(c1)
         self.cask = CASK(c1)
-        self.proj = Conv(c1, c1, k=1) # Lớp này để mix các kênh lại
+        
+        self.proj = Conv(c1, c1, k=1)
 
     def forward(self, x):
         x1 = self.branch1(x)
         x2 = self.branch2(x)
         
-        # Luôn giữ cái fix size này để tránh lỗi 36 vs 33
+        # Fix size (ông đã có tasks.py lo nhưng để đây cho an toàn cục bộ)
         if x1.shape[2:] != x2.shape[2:]:
             x2 = F.interpolate(x2, size=x1.shape[2:], mode='bilinear', align_corners=False)
             
         feat = x1 + x2
-        # SASK + CASK kết hợp để lọc "Vị trí" và "Màu sắc" vết bệnh
-        out = self.sask(feat) * self.cask(feat) 
+        
+        # Áp dụng song song hoặc nối tiếp (Ở đây là kết hợp cả hai)
+        # SASK lọc vị trí, CASK lọc loại bệnh
+        out = self.sask(feat) * self.cask(feat)
+        
         return self.proj(out) + x1
 
 # ==========================================
