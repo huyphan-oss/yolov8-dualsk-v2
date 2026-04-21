@@ -2125,16 +2125,27 @@ class DualSKBlock(nn.Module):
 
     def forward(self, x):
         identity = x
+        # Lưu lại kích thước gốc của đầu vào (ví dụ: 16x16)
+        h, w = x.shape[2:] 
+        
         out = self.cv1(x)
         x1 = self.branch1(out)
         x2 = self.branch2(out)
         
-        if x1.shape[2:] != x2.shape[2:]:
-            x2 = F.interpolate(x2, size=x1.shape[2:], mode='bilinear', align_corners=False)
+        # 1. Ép 2 nhánh về cùng size (đề phòng k=7 làm lệch)
+        if x1.shape[2:] != (h, w):
+            x1 = F.interpolate(x1, size=(h, w), mode='bilinear', align_corners=False)
+        if x2.shape[2:] != (h, w):
+            x2 = F.interpolate(x2, size=(h, w), mode='bilinear', align_corners=False)
             
         feat = x1 + x2
         out = self.sask(feat) * self.cask(feat)
         out = self.cv2(out)
+        
+        # 2. CÚ CHỐT: Đảm bảo đầu ra khớp tuyệt đối với đầu vào để cộng Identity
+        if out.shape[2:] != (h, w):
+            out = F.interpolate(out, size=(h, w), mode='bilinear', align_corners=False)
+            
         return out + identity
 
 # ==========================================
