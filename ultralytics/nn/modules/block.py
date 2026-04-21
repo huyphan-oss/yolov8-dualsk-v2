@@ -2111,30 +2111,31 @@ class CASK(nn.Module):
 class DualSKBlock(nn.Module):
     def __init__(self, c1, k1=5, k2=7):
         super().__init__()
-        self.branch1 = DWConv(c1, c1, k=k1) 
-        self.branch2 = DWConv(c1, c1, k=k2)
+        mid_c = c1 // 4  # Nén channel xuống 4 lần trước khi tính toán Kernel to
+        self.cv1 = Conv(c1, mid_c, k=1) 
         
-        # Khởi tạo 2 khối Attention
-        self.sask = SASK(c1)
-        self.cask = CASK(c1)
+        # Giờ tính trên mid_c (ví dụ 1024 -> 256), nhẹ hơn 16 lần!
+        self.branch1 = Conv(mid_c, mid_c, k=k1, g=mid_c) 
+        self.branch2 = Conv(mid_c, mid_c, k=k2, g=mid_c)
         
-        self.proj = Conv(c1, c1, k=1)
+        self.sask = SASK(mid_c)
+        self.cask = CASK(mid_c)
+        
+        self.cv2 = Conv(mid_c, c1, k=1) # Mở rộng lại về c1
 
     def forward(self, x):
-        x1 = self.branch1(x)
-        x2 = self.branch2(x)
+        identity = x
+        out = self.cv1(x)
+        x1 = self.branch1(out)
+        x2 = self.branch2(out)
         
-        # Fix size (ông đã có tasks.py lo nhưng để đây cho an toàn cục bộ)
         if x1.shape[2:] != x2.shape[2:]:
             x2 = F.interpolate(x2, size=x1.shape[2:], mode='bilinear', align_corners=False)
             
         feat = x1 + x2
-        
-        # Áp dụng song song hoặc nối tiếp (Ở đây là kết hợp cả hai)
-        # SASK lọc vị trí, CASK lọc loại bệnh
         out = self.sask(feat) * self.cask(feat)
-        
-        return self.proj(out) + x1
+        out = self.cv2(out)
+        return out + identity
 
 # ==========================================
 # KẾT THÚC MODULE DUAL-SK
