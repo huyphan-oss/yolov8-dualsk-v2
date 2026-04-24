@@ -18,10 +18,12 @@ from ultralytics.nn.modules import (
     C2PSA,
     C3,
     C3TR,
+    CASK,
     ELAN1,
     OBB,
     OBB26,
     PSA,
+    SASK,
     SPP,
     SPPELAN,
     SPPF,
@@ -31,6 +33,7 @@ from ultralytics.nn.modules import (
     Bottleneck,
     BottleneckCSP,
     C2f,
+    C2f_DualSK,
     C2fAttn,
     C2fCIB,
     C2fPSA,
@@ -72,9 +75,6 @@ from ultralytics.nn.modules import (
     YOLOESegment,
     YOLOESegment26,
     v10Detect,
-    C2f_DualSK,
-    SASK,
-    CASK
 )
 from ultralytics.utils import DEFAULT_CFG_DICT, LOGGER, WINDOWS, YAML, colorstr, emojis
 from ultralytics.utils.checks import check_requirements, check_suffix, check_yaml
@@ -182,12 +182,13 @@ class BaseModel(torch.nn.Module):
             # --- ĐOẠN VÁ LỖI SIZE TOÀN MẠNG ---
             if isinstance(x, list):
                 # Lấy kích thước của tensor đầu tiên (nhánh chính) làm chuẩn
-                target_shape = x[0].shape[2:] 
+                target_shape = x[0].shape[2:]
                 for i in range(1, len(x)):
                     if x[i].shape[2:] != target_shape:
                         import torch.nn.functional as F
+
                         # Ép tất cả về cùng size để lệnh Concat/Add không bị lỗi
-                        x[i] = F.interpolate(x[i], size=target_shape, mode='bilinear', align_corners=False)
+                        x[i] = F.interpolate(x[i], size=target_shape, mode="bilinear", align_corners=False)
             # ----------------------------------
             if profile:
                 self._profile_one_layer(m, x, dt)
