@@ -2066,21 +2066,21 @@ class RealNVP(nn.Module):
         z, log_det = self.backward_p(x)
         return self.prior.log_prob(z) + log_det
 
+
 # ==========================================
 # THÊM MODULE DUAL-SK TỪ ĐÂY
 # ==========================================
 class SASK(nn.Module):
     def __init__(self, ch):
         super().__init__()
-        self.conv = nn.Sequential(
-            nn.Conv2d(2, 1, kernel_size=7, padding=3, bias=False),
-            nn.Sigmoid()
-        )
+        self.conv = nn.Sequential(nn.Conv2d(2, 1, kernel_size=7, padding=3, bias=False), nn.Sigmoid())
+
     def forward(self, x):
         avg_out = torch.mean(x, dim=1, keepdim=True)
         max_out, _ = torch.max(x, dim=1, keepdim=True)
         mask = self.conv(torch.cat([avg_out, max_out], dim=1))
         return x * mask
+
 
 class CASK(nn.Module):
     def __init__(self, ch, reduction=16):
@@ -2090,44 +2090,48 @@ class CASK(nn.Module):
             nn.Linear(ch, ch // reduction, bias=False),
             nn.ReLU(inplace=True),
             nn.Linear(ch // reduction, ch, bias=False),
-            nn.Sigmoid()
+            nn.Sigmoid(),
         )
+
     def forward(self, x):
         b, c, _, _ = x.size()
         y = self.avg_pool(x).view(b, c)
         y = self.fc(y).view(b, c, 1, 1)
         return x * y.expand_as(x)
 
+
 class DualSKBlock_Core(nn.Module):
     def __init__(self, c1, k1=5, k2=7):
         super().__init__()
         self.branch1 = Conv(c1, c1, k=k1, g=c1)
         self.branch2 = Conv(c1, c1, k=k2, g=c1)
-        self.sask = SASK(c1 * 2) # Nhân 2 vì sau khi concat channel tăng gấp đôi
+        self.sask = SASK(c1 * 2)  # Nhân 2 vì sau khi concat channel tăng gấp đôi
         self.cask = CASK(c1 * 2)
         # Lớp nén: Đưa c1*2 về lại c1 để cộng Identity
-        self.proj = Conv(c1 * 2, c1, k=1) 
+        self.proj = Conv(c1 * 2, c1, k=1)
 
     def forward(self, x):
         h, w = x.shape[2:]
         x1 = self.branch1(x)
         x2 = self.branch2(x)
-        
+
         # Ép size
         if x1.shape[2:] != (h, w):
-            x1 = F.interpolate(x1, size=(h, w), mode='bilinear', align_corners=False)
+            x1 = F.interpolate(x1, size=(h, w), mode="bilinear", align_corners=False)
         if x2.shape[2:] != (h, w):
-            x2 = F.interpolate(x2, size=(h, w), mode='bilinear', align_corners=False)
-            
+            x2 = F.interpolate(x2, size=(h, w), mode="bilinear", align_corners=False)
+
         # CHIÊU CONCAT: Ghép thay vì cộng
-        feat = torch.cat([x1, x2], dim=1) 
-        
+        feat = torch.cat([x1, x2], dim=1)
+
         # Attention chạy trên thông tin tổng hợp
         out = self.sask(feat) * self.cask(feat)
         return self.proj(out) + x
 
+
 class C2f_DualSK(nn.Module):
-    """Tinh hoa kết hợp: C2f + DualSK"""
+    """Tinh hoa kết hợp: C2f + DualSK."""
+
     def __init__(self, c1, c2, n=1, shortcut=False, g=1, e=0.5):
         super().__init__()
         self.c = int(c2 * e)
@@ -2139,6 +2143,8 @@ class C2f_DualSK(nn.Module):
         y = list(self.cv1(x).chunk(2, 1))
         y.extend(m(y[-1]) for m in self.m)
         return self.cv2(torch.cat(y, 1))
+
+
 # ==========================================
 # KẾT THÚC MODULE DUAL-SK
 # ==========================================
